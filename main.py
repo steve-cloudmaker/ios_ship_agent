@@ -17,6 +17,12 @@ import os
 import sys
 from pathlib import Path
 
+# Support running directly as `python3 main.py` from repository root.
+PROJECT_ROOT = Path(__file__).resolve().parent
+PARENT_DIR = PROJECT_ROOT.parent
+if str(PARENT_DIR) not in sys.path:
+    sys.path.insert(0, str(PARENT_DIR))
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -89,11 +95,26 @@ def main() -> int:
     if args.aso_provider:
         os.environ["ASO_PROVIDER"] = args.aso_provider
 
-    # Validate required env vars before going further
+    # Validate required env vars before going further.
+    # We check both process env and local .env so running `python3 main.py ...`
+    # works even if keys are not exported in the shell session.
+    dotenv_vars: dict[str, str] = {}
+    env_file = Path(".env")
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") or "=" not in s:
+                continue
+            key, value = s.split("=", 1)
+            dotenv_vars[key.strip()] = value.strip().strip('"').strip("'")
+
+    def _has_env_value(key: str) -> bool:
+        return bool(os.environ.get(key) or dotenv_vars.get(key))
+
     missing = []
-    if not os.environ.get("ANTHROPIC_API_KEY") and not args.dry_run:
+    if not _has_env_value("ANTHROPIC_API_KEY") and not args.dry_run:
         missing.append("ANTHROPIC_API_KEY")
-    if not os.environ.get("OPENAI_API_KEY") and not args.dry_run:
+    if not _has_env_value("OPENAI_API_KEY") and not args.dry_run:
         missing.append("OPENAI_API_KEY")
 
     if missing:

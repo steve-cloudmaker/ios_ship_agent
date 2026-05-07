@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------------
     # Claude / LLM
     # -----------------------------------------------------------------------
-    CLAUDE_MODEL: str = "claude-sonnet-4-20250514"
+    CLAUDE_MODEL: str = "claude-sonnet-4-6"
     CLAUDE_FALLBACK_MODEL: str = "claude-haiku-4-5-20251001"
     CLAUDE_MAX_TOKENS: int = 4096
     CLAUDE_CODE_TIMEOUT_SECONDS: int = 600  # 10 min for app build
