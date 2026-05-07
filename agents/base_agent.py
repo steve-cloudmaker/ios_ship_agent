@@ -108,7 +108,20 @@ class BaseAgent(ABC):
         if system:
             kwargs["system"] = system
 
-        response = self._anthropic.messages.create(**kwargs)
+        try:
+            response = self._anthropic.messages.create(**kwargs)
+        except anthropic.NotFoundError:
+            fallback_model = settings.CLAUDE_FALLBACK_MODEL
+            if settings.CLAUDE_MODEL == fallback_model:
+                raise
+
+            self.logger.warning(
+                "Configured model '%s' unavailable. Falling back to '%s'.",
+                settings.CLAUDE_MODEL,
+                fallback_model,
+            )
+            kwargs["model"] = fallback_model
+            response = self._anthropic.messages.create(**kwargs)
         text_blocks = [b.text for b in response.content if hasattr(b, "text")]
         return "\n".join(text_blocks).strip()
 

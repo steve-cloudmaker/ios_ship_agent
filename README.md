@@ -77,6 +77,8 @@ App Idea (string)
 
 ```bash
 # Python 3.11+
+# macOS: install Python with Homebrew (`brew install python`)
+# Homebrew currently installs Python 3.14 by default
 pip install -r requirements.txt
 
 # Claude Code CLI

@@ -35,6 +35,8 @@ main.py  →  OrchestratorAgent
 
 ## Running the Pipeline
 
+On macOS, install Python using Homebrew (`brew install python`). Homebrew currently installs Python 3.14 by default.
+
 ```bash
 # Full run
 python main.py --idea "An app that identifies postage stamps and tells you their value"
