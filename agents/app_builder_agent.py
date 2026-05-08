@@ -12,7 +12,10 @@ Strategy:
    - Tab navigation
    - Settings screen
    - History/collection screens
-3. Run `xcodebuild` to verify the project compiles
+3. Run three smaller “final review” Claude Code prompts (imports/nav, state/services, previews);
+   timeouts on those steps log a warning and still run `xcodebuild`.
+
+4. Run `xcodebuild` to verify the project compiles
 
 Claude Code CLI reference:
   claude -p "prompt" --output-format json
@@ -175,18 +178,34 @@ Requirements:
 Create: SettingsView.swift
 """
 
-_PROMPT_FINAL_CHECK = """
-Review the entire {app_name} project and fix any issues:
+_PROMPT_FINAL_IMPORTS_NAV = """
+For SwiftUI project {app_name}, fix imports and tab navigation only:
 
-1. Make sure all files import the correct modules
-2. Ensure TabView references all screens correctly
-3. Fix any missing @EnvironmentObject or @StateObject declarations
-4. Make sure the onboarding flow correctly gates the main app
-5. Verify StoreManager is injected at the app root level
-6. Confirm APIService has both a live implementation and a MockAPIService for previews
-7. Add #Preview macros to all View files
+1. Ensure every Swift file imports the frameworks it uses (SwiftUI, AVFoundation, StoreKit, etc.).
+2. Ensure TabView lists every tab and each tab shows the intended screen view.
+3. Fix any incorrect or missing imports that block compilation.
 
-Do a final pass and output a summary of all files created.
+Output a brief list of files you changed.
+"""
+
+_PROMPT_FINAL_STATE_SERVICES = """
+For SwiftUI project {app_name}, fix state and services wiring:
+
+1. Fix missing @EnvironmentObject or @StateObject declarations throughout the app.
+2. Ensure onboarding correctly gates access to the main app (paywall/onboarding flow).
+3. Verify StoreManager is created once and injected at the app root (@main).
+4. Confirm APIService has a concrete implementation plus MockAPIService for previews/tests.
+
+Output a brief summary of changes only.
+"""
+
+_PROMPT_FINAL_PREVIEWS = """
+For SwiftUI project {app_name}:
+
+1. Add #Preview (or Xcode-supported preview pattern) to every View file missing one.
+2. Output a one-line summary of view files touched.
+
+Keep edits minimal aside from previews unless required to compile previews.
 """
 
 
@@ -230,31 +249,39 @@ class AppBuilderAgent(BaseAgent):
 
         # Step 1: Scaffold
         p1 = self._make_scaffold_prompt(spec)
-        self._run_claude_code(p1, project_dir)
+        scaffold_output = self._run_claude_code(p1, project_dir)
+        if not any(project_dir.iterdir()):
+            snippet = (scaffold_output or "").strip().splitlines()[:40]
+            raise RuntimeError(
+                "Claude Code scaffold step produced no files in xcode_project/. "
+                "This typically means Claude Code ran without edit permissions. "
+                "Recent output:\n"
+                + "\n".join(snippet)
+            )
         prompts_run.append(p1)
         build_log_parts.append("✓ Scaffold complete")
-        self.logger.info("✓ Step 1/6: Scaffold done")
+        self.logger.info("✓ Step 1/8: Scaffold done")
 
         # Step 2: Core feature
         p2 = self._make_core_feature_prompt(spec, aso_result)
         self._run_claude_code(p2, project_dir, continue_session=True)
         prompts_run.append(p2)
         build_log_parts.append("✓ Core feature complete")
-        self.logger.info("✓ Step 2/6: Core feature done")
+        self.logger.info("✓ Step 2/8: Core feature done")
 
         # Step 3: Onboarding
         p3 = self._make_onboarding_prompt(spec, aso_result)
         self._run_claude_code(p3, project_dir, continue_session=True)
         prompts_run.append(p3)
         build_log_parts.append("✓ Onboarding complete")
-        self.logger.info("✓ Step 3/6: Onboarding done")
+        self.logger.info("✓ Step 3/8: Onboarding done")
 
         # Step 4: Paywall
         p4 = self._make_paywall_prompt(spec, aso_result)
         self._run_claude_code(p4, project_dir, continue_session=True)
         prompts_run.append(p4)
         build_log_parts.append("✓ Paywall complete")
-        self.logger.info("✓ Step 4/6: Paywall done")
+        self.logger.info("✓ Step 4/8: Paywall done")
 
         # Step 5: History + Collection + Settings
         p5 = _PROMPT_HISTORY_COLLECTION.format(app_name=spec.app_name)
@@ -263,18 +290,57 @@ class AppBuilderAgent(BaseAgent):
         self._run_claude_code(p6, project_dir, continue_session=True)
         prompts_run.extend([p5, p6])
         build_log_parts.append("✓ History/Collection/Settings complete")
-        self.logger.info("✓ Step 5/6: History/Collection/Settings done")
+        self.logger.info("✓ Step 5/8: History/Collection/Settings done")
 
-        # Step 6: Final check + compile
-        p7 = _PROMPT_FINAL_CHECK.format(app_name=spec.app_name)
-        self._run_claude_code(p7, project_dir, continue_session=True)
-        prompts_run.append(p7)
-        build_log_parts.append("✓ Final review complete")
-        self.logger.info("✓ Step 6/6: Final review done")
+        # Steps 6–8: Split final review (smaller Claude Code calls); timeouts continue to xcodebuild
+        final_prompts = [
+            (
+                "imports/navigation",
+                _PROMPT_FINAL_IMPORTS_NAV.format(app_name=spec.app_name),
+                "✓ Final review — imports/navigation complete",
+                "⚠ Final review — imports/navigation timed out (continuing)",
+            ),
+            (
+                "state/services",
+                _PROMPT_FINAL_STATE_SERVICES.format(app_name=spec.app_name),
+                "✓ Final review — state & services complete",
+                "⚠ Final review — state & services timed out (continuing)",
+            ),
+            (
+                "previews",
+                _PROMPT_FINAL_PREVIEWS.format(app_name=spec.app_name),
+                "✓ Final review — previews complete",
+                "⚠ Final review — previews timed out (continuing)",
+            ),
+        ]
+        final_check_had_timeout = False
+        for step_idx, (short_label, prompt, ok_msg, timeout_msg) in enumerate(
+            final_prompts, start=6
+        ):
+            prompts_run.append(prompt)
+            finished = self._run_claude_code_continue_on_timeout(
+                prompt,
+                project_dir,
+                step_label=f"final review ({short_label})",
+            )
+            if finished:
+                build_log_parts.append(ok_msg)
+                self.logger.info(f"✓ Step {step_idx}/8: Final review pass done")
+            else:
+                final_check_had_timeout = True
+                build_log_parts.append(timeout_msg)
 
         # Try xcodebuild
         build_succeeded, xcode_log = self._try_xcodebuild(project_dir, spec)
         build_log_parts.append(xcode_log)
+
+        warnings: list[str] = []
+        if final_check_had_timeout:
+            warnings.append(
+                "One or more final-review Claude Code steps timed out — verify the Xcode project manually."
+            )
+        if not build_succeeded:
+            warnings.append("xcodebuild verification failed — check logs")
 
         return AppBuildResult(
             project_path=project_dir,
@@ -283,7 +349,7 @@ class AppBuilderAgent(BaseAgent):
             build_succeeded=build_succeeded,
             build_log="\n".join(build_log_parts),
             claude_code_prompts=prompts_run,
-            warnings=[] if build_succeeded else ["xcodebuild verification failed — check logs"],
+            warnings=warnings,
         )
 
     # ------------------------------------------------------------------
@@ -399,7 +465,13 @@ class AppBuilderAgent(BaseAgent):
         Returns:
             Claude Code's output text
         """
-        cmd = ["claude", "--output-format", "text"]
+        cmd = [
+            "claude",
+            "--output-format",
+            "text",
+            "--permission-mode",
+            "acceptEdits",
+        ]
         if continue_session:
             cmd.append("--continue")
         cmd += ["-p", prompt]
@@ -417,6 +489,7 @@ class AppBuilderAgent(BaseAgent):
                 text=True,
                 timeout=settings.CLAUDE_CODE_TIMEOUT_SECONDS,
                 env=env,
+                stdin=subprocess.DEVNULL,
             )
             output = result.stdout + result.stderr
             if result.returncode != 0:
@@ -425,6 +498,27 @@ class AppBuilderAgent(BaseAgent):
         except subprocess.TimeoutExpired:
             self.logger.error(f"Claude Code timed out after {settings.CLAUDE_CODE_TIMEOUT_SECONDS}s")
             raise
+
+    def _run_claude_code_continue_on_timeout(
+        self,
+        prompt: str,
+        cwd: Path,
+        step_label: str,
+    ) -> bool:
+        """
+        Run Claude Code; on timeout log a warning and return False so the caller
+        can still run xcodebuild (does not abort AppBuilderAgent).
+        """
+        try:
+            self._run_claude_code(prompt, cwd, continue_session=True)
+            return True
+        except subprocess.TimeoutExpired:
+            self.logger.warning(
+                "Claude Code timed out (%s) after %ss — continuing pipeline (xcodebuild next).",
+                step_label,
+                settings.CLAUDE_CODE_TIMEOUT_SECONDS,
+            )
+            return False
 
     def _try_xcodebuild(self, project_dir: Path, spec: AppBuildSpec) -> tuple[bool, str]:
         """

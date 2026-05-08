@@ -132,12 +132,21 @@ class VisualAgent(BaseAgent):
         if settings.DRY_RUN:
             icon_path = self._create_placeholder_icon(assets_dir, accent_color)
         else:
-            icon_path = self._generate_icon_dalle(
-                refined_idea=refined_idea,
-                icon_concept=icon_concept,
-                accent_color=accent_color,
-                out_dir=assets_dir,
-            )
+            try:
+                icon_path = self._generate_icon_dalle(
+                    refined_idea=refined_idea,
+                    icon_concept=icon_concept,
+                    accent_color=accent_color,
+                    out_dir=assets_dir,
+                )
+            except openai.OpenAIError as exc:
+                if not self._is_dalle_quota_error(exc):
+                    raise
+                self.logger.warning(
+                    "DALL-E quota exceeded or credits exhausted. "
+                    "Using placeholder icon and continuing pipeline."
+                )
+                icon_path = self._create_placeholder_icon(assets_dir, accent_color)
 
         # Step 4: Generate all icon size variants
         variant_paths = self._generate_icon_variants(icon_path, icon_dir)
@@ -198,6 +207,29 @@ class VisualAgent(BaseAgent):
             screenshots=screenshots,
             accent_color_hex=accent_color,
             color_palette=palette,
+        )
+
+    def _is_dalle_quota_error(self, exc: openai.OpenAIError) -> bool:
+        """Best-effort detection of quota/credit exhaustion errors from OpenAI."""
+        err_code = ""
+        err_type = ""
+        status_code = getattr(exc, "status_code", None)
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            error_obj = body.get("error")
+            if isinstance(error_obj, dict):
+                err_code = str(error_obj.get("code", "")).lower()
+                err_type = str(error_obj.get("type", "")).lower()
+
+        msg = str(exc).lower()
+        return (
+            status_code == 429
+            or err_code in {"insufficient_quota", "billing_hard_limit_reached"}
+            or err_type in {"insufficient_quota"}
+            or "insufficient_quota" in msg
+            or "quota" in msg
+            or "billing" in msg
+            or "credits" in msg
         )
 
     # ------------------------------------------------------------------

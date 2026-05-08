@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     CLAUDE_MODEL: str = "claude-sonnet-4-6"
     CLAUDE_FALLBACK_MODEL: str = "claude-haiku-4-5-20251001"
     CLAUDE_MAX_TOKENS: int = 4096
-    CLAUDE_CODE_TIMEOUT_SECONDS: int = 600  # 10 min for app build
+    CLAUDE_CODE_TIMEOUT_SECONDS: int = 1800  # 30 min per Claude Code subprocess (large apps)
 
     # -----------------------------------------------------------------------
     # DALL-E
